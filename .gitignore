@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.streamlit/
+.venv/
+*.pyc
+node_modules/
+data/hermes_home/
+data/inbox/*.csv
+data/inbox/*.parquet
+data/state/
+outputs/powerbi/
+outputs/reports/
+outputs/previews/
