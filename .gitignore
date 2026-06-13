@@ -11,3 +11,5 @@ data/state/
 outputs/powerbi/
 outputs/reports/
 outputs/previews/
+outputs/*.xlsx
+tools/build_property_workbook.mjs
