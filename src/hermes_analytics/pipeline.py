@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 import uuid
+import warnings
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
@@ -73,12 +75,37 @@ def file_digest(path: Path) -> str:
 def load_dataset(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
+        with path.open("r", encoding="utf-8-sig", errors="replace") as source:
+            header = source.readline()
+        separators = (";", ",", "\t", "|")
+        separator = max(separators, key=header.count)
+        encoding = "utf-8-sig"
         try:
-            return pd.read_csv(
-                path, sep=None, engine="python", encoding="utf-8-sig", decimal=","
-            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", pd.errors.ParserWarning)
+                frame = pd.read_csv(
+                    path,
+                    sep=separator,
+                    engine="c",
+                    encoding=encoding,
+                    decimal=",",
+                    on_bad_lines="warn",
+                )
         except UnicodeDecodeError:
-            return pd.read_csv(path, sep=None, engine="python", encoding="latin-1")
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", pd.errors.ParserWarning)
+                frame = pd.read_csv(
+                    path,
+                    sep=separator,
+                    engine="c",
+                    encoding="latin-1",
+                    decimal=",",
+                    on_bad_lines="warn",
+                )
+        frame.attrs["malformed_rows_skipped"] = sum(
+            len(re.findall(r"Skipping line", str(item.message))) for item in caught
+        )
+        return frame
     if suffix == ".parquet":
         return pd.read_parquet(path)
     raise ValueError("Formato nao suportado. Use CSV ou Parquet.")
@@ -101,10 +128,11 @@ def process_dataset(
     source_path = source_path.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
-    digest = file_digest(source_path)
     manifest_path = state_dir / "manifest.json"
 
     with processing_lock(state_dir):
+        source_stat = source_path.stat()
+        manifest: dict[str, Any] = {}
         if manifest_path.exists() and not force:
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -112,9 +140,33 @@ def process_dataset(
                 manifest = {}
             if (
                 manifest.get("source") == str(source_path)
+                and manifest.get("source_size") == source_stat.st_size
+                and manifest.get("source_mtime_ns") == source_stat.st_mtime_ns
+                and manifest_artifacts_exist(manifest)
+            ):
+                return {**manifest, "changed": False}
+
+        digest = file_digest(source_path)
+        verified_stat = source_path.stat()
+        if (
+            verified_stat.st_size != source_stat.st_size
+            or verified_stat.st_mtime_ns != source_stat.st_mtime_ns
+        ):
+            raise RuntimeError(
+                "A base ainda esta sendo gravada. O monitor tentara novamente automaticamente."
+            )
+        if manifest and not force:
+            if (
+                manifest.get("source") == str(source_path)
                 and manifest.get("sha256") == digest
                 and manifest_artifacts_exist(manifest)
             ):
+                manifest["source_size"] = source_stat.st_size
+                manifest["source_mtime_ns"] = source_stat.st_mtime_ns
+                atomic_write_text(
+                    manifest_path,
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                )
                 return {**manifest, "changed": False}
 
         staging_dir = state_dir / f"staging-{uuid.uuid4().hex}"
@@ -140,11 +192,7 @@ def process_dataset(
             parquet_path = output_dir / staged_parquet.name
             staged_files.append((staged_parquet, parquet_path))
 
-            fallback = deterministic_insights(profile)
-            hermes = run_hermes(profile, project_dir) if use_hermes else None
-            insight_text = hermes.text if hermes and hermes.available else fallback
-            insight_source = "Hermes Agent" if hermes and hermes.available else "Motor local"
-            hermes_error = hermes.error if hermes else None
+            insight_text = deterministic_insights(profile)
 
             staged_profile = staging_dir / "perfil_analitico.json"
             staged_profile.write_text(
@@ -166,6 +214,8 @@ def process_dataset(
             manifest = {
                 "source": str(source_path),
                 "sha256": digest,
+                "source_size": source_stat.st_size,
+                "source_mtime_ns": source_stat.st_mtime_ns,
                 "processed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "rows": len(clean),
                 "columns": len(clean.columns),
@@ -174,15 +224,31 @@ def process_dataset(
                 "output_dir": str(output_dir.resolve()),
                 "profile_path": str((output_dir / "perfil_analitico.json").resolve()),
                 "insights_path": str((output_dir / "insights.md").resolve()),
-                "insight_source": insight_source,
-                "hermes_error": hermes_error,
+                "insight_source": "Motor local",
+                "hermes_error": None,
                 "changed": True,
-                "hermes": asdict(hermes) if hermes else None,
+                "hermes": None,
             }
             atomic_write_text(
                 manifest_path,
                 json.dumps(manifest, ensure_ascii=False, indent=2),
             )
-            return manifest
         finally:
             shutil.rmtree(staging_dir, ignore_errors=True)
+
+    if use_hermes:
+        hermes = run_hermes(profile, project_dir)
+        with processing_lock(state_dir):
+            current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if current.get("sha256") == digest:
+                if hermes.available:
+                    atomic_write_text(output_dir / "insights.md", hermes.text)
+                    current["insight_source"] = "Hermes Agent"
+                current["hermes_error"] = hermes.error
+                current["hermes"] = asdict(hermes)
+                atomic_write_text(
+                    manifest_path,
+                    json.dumps(current, ensure_ascii=False, indent=2),
+                )
+                manifest = current
+    return manifest

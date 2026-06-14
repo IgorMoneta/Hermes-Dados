@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,14 +33,16 @@ RESUMO_JSON:
 """.strip()
 
 
-def run_hermes(
+def run_hermes_local(
     profile: dict[str, Any],
     cwd: Path,
-    timeout_seconds: int = 120,
+    timeout_seconds: int | None = None,
 ) -> HermesResult:
     executable = shutil.which("hermes")
     if not executable:
         return HermesResult(False, "", "CLI do Hermes nao encontrado.")
+    if timeout_seconds is None:
+        timeout_seconds = int(os.getenv("HERMES_TIMEOUT_SECONDS", "20"))
 
     command = [
         executable,
@@ -85,3 +89,51 @@ def run_hermes(
         error = completed.stderr.strip() or f"Hermes retornou codigo {completed.returncode}."
         return HermesResult(False, "", error[-1200:])
     return HermesResult(True, text)
+
+
+def run_hermes_remote(
+    profile: dict[str, Any],
+    api_url: str,
+    api_token: str,
+    timeout_seconds: int,
+) -> HermesResult:
+    endpoint = f"{api_url.rstrip('/')}/analyze"
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps({"profile": profile}, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": "Hermes-Analytics/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        return HermesResult(False, "", f"API Hermes retornou HTTP {exc.code}: {detail[-500:]}")
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return HermesResult(False, "", f"Falha na API remota do Hermes: {exc}")
+
+    if not payload.get("available") or not payload.get("text"):
+        return HermesResult(False, "", payload.get("error") or "API Hermes sem resposta valida.")
+    return HermesResult(True, str(payload["text"]))
+
+
+def run_hermes(
+    profile: dict[str, Any],
+    cwd: Path,
+    timeout_seconds: int | None = None,
+) -> HermesResult:
+    if timeout_seconds is None:
+        timeout_seconds = int(os.getenv("HERMES_TIMEOUT_SECONDS", "20"))
+
+    api_url = os.getenv("HERMES_API_URL", "").strip()
+    api_token = os.getenv("HERMES_API_TOKEN", "").strip()
+    if api_url:
+        if not api_token:
+            return HermesResult(False, "", "HERMES_API_TOKEN nao configurado.")
+        return run_hermes_remote(profile, api_url, api_token, timeout_seconds)
+    return run_hermes_local(profile, cwd, timeout_seconds)

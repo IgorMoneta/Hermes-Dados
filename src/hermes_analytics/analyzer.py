@@ -72,6 +72,7 @@ def _numeric_br(series: pd.Series) -> pd.Series:
 
 
 def clean_credit_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    malformed_rows = int(frame.attrs.get("malformed_rows_skipped", 0))
     data = normalize_columns(frame)
     rows_before = len(data)
     duplicate_rows = int(data.duplicated().sum())
@@ -104,6 +105,7 @@ def clean_credit_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]
         "negative_financial_values": int(
             sum((data[column] < 0).sum() for column in CREDIT_VALUE_COLUMNS if column in data)
         ),
+        "malformed_rows_skipped": malformed_rows,
     }
     return data, quality
 
@@ -115,6 +117,7 @@ def clean_data(frame: pd.DataFrame, domain: str) -> tuple[pd.DataFrame, dict[str
 
 
 def clean_property_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    malformed_rows = int(frame.attrs.get("malformed_rows_skipped", 0))
     data = normalize_property_columns(frame)
     rows_before = len(data)
     duplicate_rows = int(data.duplicated().sum())
@@ -149,6 +152,7 @@ def clean_property_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, An
         "invalid_price_values": invalid_price,
         "invalid_area_values": invalid_area,
         "missing_cells": int(data.isna().sum().sum()),
+        "malformed_rows_skipped": malformed_rows,
     }
     return data, quality
 

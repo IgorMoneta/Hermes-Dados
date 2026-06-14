@@ -56,6 +56,42 @@ $env:HERMES_AUTO_INSIGHTS = "0"
 .\iniciar.ps1
 ```
 
+## Deploy com o Hermes rodando no computador local
+
+O aplicativo publicado pode chamar o Hermes deste computador por meio de uma
+API local protegida e de um Cloudflare Tunnel HTTPS.
+
+### Preparacao inicial
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\configurar_ponte_hermes.ps1
+powershell -ExecutionPolicy Bypass -File .\instalar_cloudflared.ps1
+```
+
+### Iniciar a integracao online
+
+Execute `INICIAR_HERMES_ONLINE.bat`. Ele abre:
+
+1. a API local em `http://127.0.0.1:8787`;
+2. o tunel HTTPS do Cloudflare.
+
+O script exibe a URL `https://...trycloudflare.com` e a salva automaticamente
+em `data/state/hermes-tunnel-url.txt`.
+
+Depois execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\gerar_secrets_streamlit.ps1
+```
+
+Cadastre o conteudo de `data/state/SECRETS_STREAMLIT_PRONTO.toml` em
+**Streamlit Community Cloud > App settings > Secrets**.
+
+O computador precisa permanecer ligado com a API e o tunel abertos. A URL de
+um Quick Tunnel muda quando ele e reiniciado; nesse caso, atualize
+`HERMES_API_URL` nos Secrets. Para uma URL permanente, configure posteriormente
+um Named Tunnel em uma conta Cloudflare com dominio proprio.
+
 ## Desenvolvimento
 
 ```powershell

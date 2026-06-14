@@ -1,6 +1,8 @@
 __pycache__/
 .pytest_cache/
 .streamlit/
+.env.local
+cloudflared.exe
 .venv/
 *.pyc
 node_modules/

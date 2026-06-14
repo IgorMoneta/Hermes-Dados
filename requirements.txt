@@ -1,6 +1,7 @@
 altair>=6.0,<7
+fastapi>=0.115,<1
 pandas>=2.2,<3
 pyarrow>=24,<25
 streamlit>=1.58,<2
+uvicorn>=0.34,<1
 watchdog>=6,<7
-

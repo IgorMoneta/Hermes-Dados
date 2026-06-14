@@ -17,6 +17,14 @@ sys.path.insert(0, str(ROOT / "src"))
 from hermes_analytics.pipeline import load_dataset, process_dataset  # noqa: E402
 
 
+for secret_name in ("HERMES_API_URL", "HERMES_API_TOKEN", "HERMES_TIMEOUT_SECONDS"):
+    try:
+        secret_value = st.secrets.get(secret_name)
+    except FileNotFoundError:
+        secret_value = None
+    if secret_value and not os.getenv(secret_name):
+        os.environ[secret_name] = str(secret_value)
+
 INBOX = ROOT / "data" / "inbox"
 OUTPUT = ROOT / "outputs" / "powerbi"
 STATE = ROOT / "data" / "state"
@@ -60,12 +68,20 @@ def save_upload(uploaded_file) -> Path:
     INBOX.mkdir(parents=True, exist_ok=True)
     suffix = Path(uploaded_file.name).suffix.lower()
     target = INBOX / f"base_atual{suffix}"
+    temporary = INBOX / f".uploading{suffix}"
+    with temporary.open("wb") as destination:
+        shutil.copyfileobj(uploaded_file, destination)
     for old in INBOX.glob("base_atual.*"):
         if old != target:
             old.unlink(missing_ok=True)
-    with target.open("wb") as destination:
-        shutil.copyfileobj(uploaded_file, destination)
+    os.replace(temporary, target)
     return target
+
+
+@st.cache_data(show_spinner=False)
+def load_processed_dataset(path: str, modified_ns: int) -> pd.DataFrame:
+    del modified_ns
+    return load_dataset(Path(path))
 
 
 def render_dashboard(data: pd.DataFrame) -> None:
@@ -308,6 +324,8 @@ with st.sidebar:
     st.divider()
     st.caption(f"Pasta monitorada: {INBOX}")
     st.caption("Atualizacao automatica: a cada 5 segundos")
+    hermes_mode = "API remota" if os.getenv("HERMES_API_URL") else "Executavel local"
+    st.caption(f"Modo Hermes: {hermes_mode}")
 
 if uploaded is not None:
     current = save_upload(uploaded)
@@ -341,7 +359,8 @@ def monitor() -> None:
 
         profile = json.loads(Path(manifest["profile_path"]).read_text(encoding="utf-8"))
         insights = Path(manifest["insights_path"]).read_text(encoding="utf-8")
-        data = load_dataset(Path(manifest["fact_path"]))
+        fact_path = Path(manifest["fact_path"])
+        data = load_processed_dataset(str(fact_path), fact_path.stat().st_mtime_ns)
 
         tabs = st.tabs(["Dashboard", "Insights", "Power BI", "Qualidade"])
         with tabs[0]:
@@ -357,15 +376,21 @@ def monitor() -> None:
                 "Parquet preserva tipos de dados."
             )
             st.code(str(OUTPUT.resolve()), language=None)
-            files = sorted(OUTPUT.glob("*.csv")) + sorted(OUTPUT.glob("*.parquet"))
-            for path in files:
-                st.download_button(
-                    f"Baixar {path.name}",
-                    data=path.read_bytes(),
-                    file_name=path.name,
-                    mime="application/octet-stream",
-                    key=str(path),
+            files = sorted(OUTPUT.glob("*.parquet")) + sorted(OUTPUT.glob("*.csv"))
+            if files:
+                selected_name = st.selectbox(
+                    "Arquivo para download",
+                    [path.name for path in files],
                 )
+                selected = next(path for path in files if path.name == selected_name)
+                if st.checkbox("Preparar arquivo para download", key="prepare_download"):
+                    st.download_button(
+                        f"Baixar {selected.name}",
+                        data=selected.read_bytes(),
+                        file_name=selected.name,
+                        mime="application/octet-stream",
+                        key=str(selected),
+                    )
         with tabs[3]:
             st.json(profile["quality"])
             st.write("Colunas detectadas:", ", ".join(profile["column_names"]))
