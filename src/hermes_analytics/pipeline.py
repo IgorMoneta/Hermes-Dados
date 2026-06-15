@@ -84,11 +84,17 @@ def refresh_hermes_insights(
     project_dir: Path,
 ) -> dict[str, Any]:
     fingerprint = hermes_endpoint_fingerprint()
-    if (
-        manifest.get("insight_source") == "Hermes Agent"
-        or manifest.get("hermes_endpoint_fingerprint") == fingerprint
-    ):
+    if manifest.get("insight_source") == "Hermes Agent":
         return manifest
+    last_attempt = manifest.get("hermes_attempted_at")
+    if manifest.get("hermes_endpoint_fingerprint") == fingerprint and last_attempt:
+        try:
+            attempted_at = datetime.fromisoformat(last_attempt)
+            elapsed = datetime.now().astimezone() - attempted_at
+            if elapsed.total_seconds() < 60:
+                return manifest
+        except ValueError:
+            pass
 
     profile = json.loads(Path(manifest["profile_path"]).read_text(encoding="utf-8"))
     hermes = run_hermes(profile, project_dir)
@@ -103,6 +109,9 @@ def refresh_hermes_insights(
         current["hermes_error"] = hermes.error
         current["hermes"] = asdict(hermes)
         current["hermes_endpoint_fingerprint"] = fingerprint
+        current["hermes_attempted_at"] = datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        )
         atomic_write_text(
             manifest_path,
             json.dumps(current, ensure_ascii=False, indent=2),
@@ -297,6 +306,9 @@ def process_dataset(
                 current["hermes_error"] = hermes.error
                 current["hermes"] = asdict(hermes)
                 current["hermes_endpoint_fingerprint"] = hermes_endpoint_fingerprint()
+                current["hermes_attempted_at"] = datetime.now().astimezone().isoformat(
+                    timespec="seconds"
+                )
                 atomic_write_text(
                     manifest_path,
                     json.dumps(current, ensure_ascii=False, indent=2),
