@@ -313,6 +313,90 @@ def render_credit_dashboard(data: pd.DataFrame) -> None:
     st.dataframe(filtered[display_columns].head(200), width="stretch", hide_index=True)
 
 
+def render_generic_dashboard(data: pd.DataFrame) -> None:
+    numeric_columns = list(data.select_dtypes(include="number").columns)
+    categorical_columns = [
+        column
+        for column in data.columns
+        if data[column].nunique(dropna=True) <= 100
+    ]
+
+    metrics = st.columns(4)
+    metrics[0].metric("Registros", f"{len(data):,}".replace(",", "."))
+    metrics[1].metric("Colunas", len(data.columns))
+    metrics[2].metric("Colunas numericas", len(numeric_columns))
+    metrics[3].metric("Celulas ausentes", f"{int(data.isna().sum().sum()):,}".replace(",", "."))
+
+    left, right = st.columns(2)
+    if numeric_columns:
+        selected_numeric = left.selectbox(
+            "Coluna numerica para distribuicao",
+            numeric_columns,
+            key="generic_numeric",
+        )
+        numeric_data = data[[selected_numeric]].dropna()
+        histogram = (
+            alt.Chart(numeric_data)
+            .mark_bar(color="#38bdf8")
+            .encode(
+                x=alt.X(f"{selected_numeric}:Q", bin=alt.Bin(maxbins=30), title=selected_numeric),
+                y=alt.Y("count():Q", title="Quantidade"),
+                tooltip=[alt.Tooltip("count():Q", title="Registros")],
+            )
+            .properties(title=f"Distribuicao de {selected_numeric}", height=330)
+        )
+        left.altair_chart(histogram, width="stretch")
+
+    if categorical_columns:
+        selected_category = right.selectbox(
+            "Coluna categorica",
+            categorical_columns,
+            key="generic_category",
+        )
+        category_data = (
+            data[selected_category]
+            .fillna("Nao informado")
+            .astype(str)
+            .value_counts()
+            .head(15)
+            .rename_axis(selected_category)
+            .reset_index(name="registros")
+        )
+        category_chart = (
+            alt.Chart(category_data)
+            .mark_bar(cornerRadiusEnd=4, color="#22c55e")
+            .encode(
+                x=alt.X("registros:Q", title="Registros"),
+                y=alt.Y(f"{selected_category}:N", sort="-x", title=None),
+                tooltip=[selected_category, "registros"],
+            )
+            .properties(title=f"Valores mais frequentes de {selected_category}", height=330)
+        )
+        right.altair_chart(category_chart, width="stretch")
+
+    if len(numeric_columns) >= 2:
+        st.subheader("Relacao entre colunas numericas")
+        selectors = st.columns(2)
+        x_column = selectors[0].selectbox("Eixo X", numeric_columns, key="generic_x")
+        y_options = [column for column in numeric_columns if column != x_column]
+        y_column = selectors[1].selectbox("Eixo Y", y_options, key="generic_y")
+        scatter_data = data[[x_column, y_column]].dropna().head(20_000)
+        scatter = (
+            alt.Chart(scatter_data)
+            .mark_circle(color="#f59e0b", opacity=0.55, size=45)
+            .encode(
+                x=alt.X(f"{x_column}:Q", title=x_column),
+                y=alt.Y(f"{y_column}:Q", title=y_column),
+                tooltip=[x_column, y_column],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(scatter, width="stretch")
+
+    st.subheader("Amostra da base tratada")
+    st.dataframe(data.head(200), width="stretch", hide_index=True)
+
+
 st.title("Hermes Analytics")
 st.caption("Analise automatica local, insights com Hermes e saidas prontas para Power BI.")
 
@@ -372,6 +456,8 @@ def monitor() -> None:
         with tabs[0]:
             if manifest.get("domain") == "credito_scr":
                 render_credit_dashboard(data)
+            elif manifest.get("domain") == "generico":
+                render_generic_dashboard(data)
             else:
                 render_dashboard(data)
         with tabs[1]:

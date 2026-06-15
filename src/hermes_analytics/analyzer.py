@@ -113,7 +113,25 @@ def clean_credit_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]
 def clean_data(frame: pd.DataFrame, domain: str) -> tuple[pd.DataFrame, dict[str, Any]]:
     if domain == "credito_scr":
         return clean_credit_data(frame)
-    return clean_property_data(frame)
+    if domain == "imoveis":
+        return clean_property_data(frame)
+    return clean_generic_data(frame)
+
+
+def clean_generic_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    malformed_rows = int(frame.attrs.get("malformed_rows_skipped", 0))
+    data = normalize_columns(frame)
+    rows_before = len(data)
+    duplicate_rows = int(data.duplicated().sum())
+    data = data.drop_duplicates().copy()
+    quality = {
+        "rows_before": rows_before,
+        "rows_after": len(data),
+        "duplicate_rows_removed": duplicate_rows,
+        "missing_cells": int(data.isna().sum().sum()),
+        "malformed_rows_skipped": malformed_rows,
+    }
+    return data, quality
 
 
 def clean_property_data(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -279,14 +297,60 @@ def create_analysis_profile(
 ) -> dict[str, Any]:
     if domain == "credito_scr":
         return create_credit_profile(data, quality)
+    if domain == "generico":
+        return create_generic_profile(data, quality)
     profile = create_profile(data, quality)
     profile["domain"] = domain
+    return profile
+
+
+def create_generic_profile(
+    data: pd.DataFrame, quality: dict[str, Any]
+) -> dict[str, Any]:
+    numeric = data.select_dtypes(include="number")
+    categorical = [
+        column
+        for column in data.columns
+        if data[column].nunique(dropna=True) <= 50
+    ]
+    profile: dict[str, Any] = {
+        "domain": "generico",
+        "rows": len(data),
+        "columns": len(data.columns),
+        "quality": quality,
+        "column_names": list(data.columns),
+        "numeric_columns": list(numeric.columns),
+        "categorical_columns": categorical,
+    }
+    profile["numeric_summary"] = {
+        column: {
+            "mean": _safe_float(numeric[column].mean()),
+            "median": _safe_float(numeric[column].median()),
+            "min": _safe_float(numeric[column].min()),
+            "max": _safe_float(numeric[column].max()),
+        }
+        for column in numeric.columns[:20]
+    }
+    profile["top_values"] = {
+        column: {
+            str(value): int(count)
+            for value, count in data[column]
+            .fillna("Nao informado")
+            .astype(str)
+            .value_counts()
+            .head(10)
+            .items()
+        }
+        for column in categorical[:10]
+    }
     return profile
 
 
 def deterministic_insights(profile: dict[str, Any]) -> str:
     if profile.get("domain") == "credito_scr":
         return credit_insights(profile)
+    if profile.get("domain") == "generico":
+        return generic_insights(profile)
     def brl(value: float) -> str:
         return f"{value:,.0f}".replace(",", ".")
 
@@ -328,6 +392,39 @@ def deterministic_insights(profile: dict[str, Any]) -> str:
             "- Compare preco por m2 dentro da mesma cidade, bairro e tipo de imovel.",
             "- Investigue anuncios muito acima do intervalo interquartil antes de decidir.",
             "- Atualize a base monitorada e acompanhe a mudanca dos indicadores automaticamente.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def generic_insights(profile: dict[str, Any]) -> str:
+    quality = profile.get("quality", {})
+    numeric = profile.get("numeric_summary", {})
+    lines = [
+        "### Visao geral da base",
+        f"- A base possui **{profile.get('rows', 0):,} registros** e "
+        f"**{profile.get('columns', 0)} colunas**.",
+        f"- Foram identificadas **{len(profile.get('numeric_columns', []))} colunas numericas** "
+        f"e **{len(profile.get('categorical_columns', []))} categoricas**.",
+    ]
+    if numeric:
+        name, values = next(iter(numeric.items()))
+        lines.append(
+            f"- A coluna **{name}** varia de **{values['min']}** a **{values['max']}**, "
+            f"com media **{values['mean']}**."
+        )
+    lines.extend(
+        [
+            "",
+            "### Qualidade",
+            f"- Duplicatas removidas: **{quality.get('duplicate_rows_removed', 0)}**.",
+            f"- Celulas ausentes: **{quality.get('missing_cells', 0)}**.",
+            f"- Linhas malformadas ignoradas: **{quality.get('malformed_rows_skipped', 0)}**.",
+            "",
+            "### Recomendacoes",
+            "- Defina o significado de cada coluna antes de interpretar correlacoes.",
+            "- Compare distribuicoes, valores ausentes e categorias mais frequentes.",
+            "- Para indicadores especificos, configure um dominio e regras de negocio da base.",
         ]
     )
     return "\n".join(lines)
@@ -460,4 +557,25 @@ def build_credit_tables(data: pd.DataFrame) -> dict[str, pd.DataFrame]:
 def build_analysis_tables(data: pd.DataFrame, domain: str) -> dict[str, pd.DataFrame]:
     if domain == "credito_scr":
         return build_credit_tables(data)
+    if domain == "generico":
+        return build_generic_tables(data)
     return build_powerbi_tables(data)
+
+
+def build_generic_tables(data: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    summary_rows = []
+    for column in data.columns:
+        series = data[column]
+        summary_rows.append(
+            {
+                "coluna": column,
+                "tipo": str(series.dtype),
+                "preenchidos": int(series.notna().sum()),
+                "ausentes": int(series.isna().sum()),
+                "valores_unicos": int(series.nunique(dropna=True)),
+            }
+        )
+    return {
+        "fato_dados": data.copy(),
+        "resumo_colunas": pd.DataFrame(summary_rows),
+    }

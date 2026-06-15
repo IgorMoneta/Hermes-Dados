@@ -115,8 +115,12 @@ def load_dataset(path: Path) -> pd.DataFrame:
     if suffix == ".csv":
         with path.open("r", encoding="utf-8-sig", errors="replace") as source:
             header = source.readline()
+            sample = source.read(64 * 1024)
         separators = (";", ",", "\t", "|")
         separator = max(separators, key=header.count)
+        comma_decimals = len(re.findall(r"\d+,\d+", sample))
+        dot_decimals = len(re.findall(r"\d+\.\d+", sample))
+        decimal = "," if separator != "," and comma_decimals > dot_decimals else "."
         encoding = "utf-8-sig"
         try:
             with warnings.catch_warnings(record=True) as caught:
@@ -126,7 +130,8 @@ def load_dataset(path: Path) -> pd.DataFrame:
                     sep=separator,
                     engine="c",
                     encoding=encoding,
-                    decimal=",",
+                    decimal=decimal,
+                    thousands="." if decimal == "," else None,
                     on_bad_lines="warn",
                 )
         except UnicodeDecodeError:
@@ -137,12 +142,15 @@ def load_dataset(path: Path) -> pd.DataFrame:
                     sep=separator,
                     engine="c",
                     encoding="latin-1",
-                    decimal=",",
+                    decimal=decimal,
+                    thousands="." if decimal == "," else None,
                     on_bad_lines="warn",
                 )
         frame.attrs["malformed_rows_skipped"] = sum(
             len(re.findall(r"Skipping line", str(item.message))) for item in caught
         )
+        frame.attrs["detected_separator"] = separator
+        frame.attrs["detected_decimal"] = decimal
         return frame
     if suffix == ".parquet":
         return pd.read_parquet(path)
@@ -224,7 +232,11 @@ def process_dataset(
                 )
                 staged_files.append((staged, output_dir / staged.name))
 
-            fact_name = "fato_credito" if domain == "credito_scr" else "fato_imoveis"
+            fact_name = {
+                "credito_scr": "fato_credito",
+                "imoveis": "fato_imoveis",
+                "generico": "fato_dados",
+            }[domain]
             staged_parquet = staging_dir / f"{fact_name}.parquet"
             clean.to_parquet(staged_parquet, index=False)
             parquet_path = output_dir / staged_parquet.name
