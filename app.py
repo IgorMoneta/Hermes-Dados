@@ -14,7 +14,11 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from hermes_analytics.pipeline import load_dataset, process_dataset  # noqa: E402
+from hermes_analytics.pipeline import (  # noqa: E402
+    load_dataset,
+    process_dataset,
+    refresh_hermes_insights,
+)
 
 
 for secret_name in ("HERMES_API_URL", "HERMES_API_TOKEN", "HERMES_TIMEOUT_SECONDS"):
@@ -348,6 +352,8 @@ def monitor() -> None:
                 use_hermes=use_hermes,
                 force=force,
             )
+            if use_hermes and manifest.get("insight_source") != "Hermes Agent":
+                manifest = refresh_hermes_insights(manifest, OUTPUT, STATE, ROOT)
         status = "Base alterada e reprocessada" if manifest["changed"] else "Base sincronizada"
         st.success(
             f"{status} | {manifest['rows']} linhas | "

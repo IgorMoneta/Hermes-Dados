@@ -72,6 +72,44 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def hermes_endpoint_fingerprint() -> str:
+    endpoint = os.getenv("HERMES_API_URL", "").strip() or "local"
+    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+
+
+def refresh_hermes_insights(
+    manifest: dict[str, Any],
+    output_dir: Path,
+    state_dir: Path,
+    project_dir: Path,
+) -> dict[str, Any]:
+    fingerprint = hermes_endpoint_fingerprint()
+    if (
+        manifest.get("insight_source") == "Hermes Agent"
+        or manifest.get("hermes_endpoint_fingerprint") == fingerprint
+    ):
+        return manifest
+
+    profile = json.loads(Path(manifest["profile_path"]).read_text(encoding="utf-8"))
+    hermes = run_hermes(profile, project_dir)
+    manifest_path = state_dir / "manifest.json"
+    with processing_lock(state_dir):
+        current = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if current.get("sha256") != manifest.get("sha256"):
+            return current
+        if hermes.available:
+            atomic_write_text(output_dir / "insights.md", hermes.text)
+            current["insight_source"] = "Hermes Agent"
+        current["hermes_error"] = hermes.error
+        current["hermes"] = asdict(hermes)
+        current["hermes_endpoint_fingerprint"] = fingerprint
+        atomic_write_text(
+            manifest_path,
+            json.dumps(current, ensure_ascii=False, indent=2),
+        )
+        return current
+
+
 def load_dataset(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
@@ -246,6 +284,7 @@ def process_dataset(
                     current["insight_source"] = "Hermes Agent"
                 current["hermes_error"] = hermes.error
                 current["hermes"] = asdict(hermes)
+                current["hermes_endpoint_fingerprint"] = hermes_endpoint_fingerprint()
                 atomic_write_text(
                     manifest_path,
                     json.dumps(current, ensure_ascii=False, indent=2),
