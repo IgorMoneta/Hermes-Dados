@@ -16,7 +16,8 @@ $Token = ([BitConverter]::ToString($TokenBytes) -replace "-", "").ToLowerInvaria
 
 $Content = @"
 HERMES_API_TOKEN=$Token
-HERMES_TIMEOUT_SECONDS=20
+HERMES_TIMEOUT_SECONDS=60
+HERMES_LOCAL_TIMEOUT_SECONDS=60
 "@
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ConfigPath, $Content, $Utf8NoBom)

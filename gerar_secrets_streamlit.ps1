@@ -21,7 +21,7 @@ $Url = (Get-Content -LiteralPath $UrlPath -Raw).Trim()
 $Content = @"
 HERMES_API_URL = "$Url"
 HERMES_API_TOKEN = "$($Config["HERMES_API_TOKEN"])"
-HERMES_TIMEOUT_SECONDS = "45"
+HERMES_TIMEOUT_SECONDS = "70"
 "@
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($OutputPath, $Content, $Utf8NoBom)

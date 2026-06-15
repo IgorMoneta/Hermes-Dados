@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -16,6 +17,28 @@ class HermesResult:
     available: bool
     text: str
     error: str | None = None
+
+
+def _remote_error_message(exc: Exception, api_url: str) -> str:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, socket.gaierror):
+        return (
+            "Nao foi possivel localizar o endereco da API remota do Hermes. "
+            "A URL do Cloudflare Tunnel pode ter expirado; reinicie "
+            "INICIAR_HERMES_ONLINE.bat e atualize HERMES_API_URL nos Secrets "
+            f"do Streamlit. URL configurada: {api_url}"
+        )
+    if isinstance(reason, (ConnectionRefusedError, ConnectionResetError)):
+        return (
+            "A API remota do Hermes recusou a conexao. Confirme que a API local "
+            "e o Cloudflare Tunnel continuam em execucao."
+        )
+    if isinstance(reason, TimeoutError):
+        return (
+            "A API remota do Hermes excedeu o tempo limite. Confirme a conexao "
+            "e aumente HERMES_TIMEOUT_SECONDS se necessario."
+        )
+    return f"Falha na API remota do Hermes: {exc}"
 
 
 def build_prompt(profile: dict[str, Any]) -> str:
@@ -42,7 +65,12 @@ def run_hermes_local(
     if not executable:
         return HermesResult(False, "", "CLI do Hermes nao encontrado.")
     if timeout_seconds is None:
-        timeout_seconds = int(os.getenv("HERMES_TIMEOUT_SECONDS", "20"))
+        timeout_seconds = int(
+            os.getenv(
+                "HERMES_LOCAL_TIMEOUT_SECONDS",
+                os.getenv("HERMES_TIMEOUT_SECONDS", "60"),
+            )
+        )
 
     command = [
         executable,
@@ -56,7 +84,7 @@ def run_hermes_local(
         "--max-turns",
         "1",
         "-t",
-        "none",
+        "hermes-cli",
     ]
     environment = os.environ.copy()
     configured_home = Path(environment.get("HERMES_HOME", "")).expanduser()
@@ -114,8 +142,10 @@ def run_hermes_remote(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         return HermesResult(False, "", f"API Hermes retornou HTTP {exc.code}: {detail[-500:]}")
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        return HermesResult(False, "", f"Falha na API remota do Hermes: {exc}")
+    except json.JSONDecodeError:
+        return HermesResult(False, "", "A API remota do Hermes retornou JSON invalido.")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return HermesResult(False, "", _remote_error_message(exc, api_url))
 
     if not payload.get("available") or not payload.get("text"):
         return HermesResult(False, "", payload.get("error") or "API Hermes sem resposta valida.")
